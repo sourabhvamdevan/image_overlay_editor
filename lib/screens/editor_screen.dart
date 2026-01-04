@@ -4,6 +4,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:gallery_saver/gallery_saver.dart';
 
 import '../models/overlay_item.dart';
 import '../widgets/overlay_widget.dart';
@@ -18,10 +20,31 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> {
   final GlobalKey _canvasKey = GlobalKey();
   final List<OverlayItem> _items = [];
+  final ImagePicker _picker = ImagePicker();
+
   OverlayItem? _selectedItem;
+  File? _backgroundImage;
+
   int _idCounter = 0;
   bool _isDark = false;
 
+  // ---------- IMAGE PICKER ----------
+  Future<void> _pickBackgroundImage() async {
+    final picked = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 100,
+    );
+
+    if (picked == null) return;
+
+    setState(() {
+      _backgroundImage = File(picked.path);
+      _items.clear();
+      _selectedItem = null;
+    });
+  }
+
+  // ---------- OVERLAYS ----------
   void _addLogo() {
     setState(() {
       _items.add(
@@ -83,24 +106,32 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  Future<void> _exportImage() async {
-    final boundary =
-        _canvasKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+  // ---------- EXPORT & SAVE TO GALLERY ----------
+  Future<void> _exportToGallery() async {
+    final context = _canvasKey.currentContext;
+    if (context == null) return;
 
-    final image = await boundary.toImage(pixelRatio: 3.0);
+    final renderObject = context.findRenderObject();
+    if (renderObject == null || renderObject is! RenderRepaintBoundary) return;
+
+    final image = await renderObject.toImage(pixelRatio: 3.0);
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
 
-    final dir = await getApplicationDocumentsDirectory();
+    if (byteData == null) return;
+
+    final tempDir = await getTemporaryDirectory();
     final file = File(
-      '${dir.path}/overlay_${DateTime.now().millisecondsSinceEpoch}.png',
+      '${tempDir.path}/overlay_${DateTime.now().millisecondsSinceEpoch}.png',
     );
 
-    await file.writeAsBytes(byteData!.buffer.asUint8List());
+    await file.writeAsBytes(byteData.buffer.asUint8List());
+
+    await GallerySaver.saveImage(file.path, albumName: 'OverlayEditor');
 
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text('Saved to ${file.path}')));
+    ).showSnackBar(const SnackBar(content: Text('Saved to Gallery')));
   }
 
   @override
@@ -115,12 +146,19 @@ class _EditorScreenState extends State<EditorScreen> {
             icon: Icon(_isDark ? Icons.light_mode : Icons.dark_mode),
             onPressed: () => setState(() => _isDark = !_isDark),
           ),
+          IconButton(
+            icon: const Icon(Icons.photo_library),
+            onPressed: _pickBackgroundImage,
+          ),
           if (_selectedItem != null)
             IconButton(
               icon: const Icon(Icons.delete),
               onPressed: _deleteSelected,
             ),
-          IconButton(icon: const Icon(Icons.download), onPressed: _exportImage),
+          IconButton(
+            icon: const Icon(Icons.download),
+            onPressed: _exportToGallery,
+          ),
         ],
       ),
       body: Theme(
@@ -137,7 +175,18 @@ class _EditorScreenState extends State<EditorScreen> {
                     key: _canvasKey,
                     child: Stack(
                       children: [
-                        Image.asset('assets/sample.jpg'),
+                        _backgroundImage != null
+                            ? Image.file(_backgroundImage!)
+                            : const SizedBox(
+                                width: 300,
+                                height: 300,
+                                child: Center(
+                                  child: Text(
+                                    'Pick an image',
+                                    style: TextStyle(fontSize: 18),
+                                  ),
+                                ),
+                              ),
                         ..._items.map(
                           (item) => OverlayWidget(
                             item: item,
